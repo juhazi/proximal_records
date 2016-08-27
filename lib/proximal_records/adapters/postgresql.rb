@@ -8,13 +8,35 @@ module ProximalRecords
 
         orders = "OVER(#{"ORDER BY #{orders}" if orders.present?})"
         primary_key = "#{klass.table_name}.#{klass.primary_key}"
-        with_near_by = scope.select("#{klass.table_name}.*, LAG(#{primary_key}) #{orders} AS previous_id, LEAD(#{primary_key}) #{orders} AS next_id")
 
-        table = with_near_by.arel
-        as = table.as(Arel.sql('z'))
-        a = klass.select('z.*').from(as.to_sql).where(z: {klass.primary_key => id}).limit(1)[0]
+        scope_with_default_select = if scope.select_values.blank?
+          # AR will replace default star select unless there's
+          # atleast one select used
+          scope.select(klass.arel_table[Arel.star])
+        else
+          # AR will append selects if any are defined previously
+          scope
+        end
 
-        [(klass.find_by_id(a.previous_id)), (klass.find_by_id(a.next_id))]
+        with_near_by = scope_with_default_select.select <<-EOSQL.squish
+          LAG(#{primary_key}) #{orders} AS previous_id,
+          LEAD(#{primary_key}) #{orders} AS next_id
+        EOSQL
+
+        scope_query = with_near_by.to_sql
+        a = klass
+          .unscoped
+          .select('z.*')
+          .from("(#{scope_query}) z")
+          .where(z: {klass.primary_key => id})
+          .order('z.id ASC')
+          .limit(1)
+          .first
+
+        [
+          (klass.find_by_id(a.previous_id)),
+          (klass.find_by_id(a.next_id))
+        ]
       end
     end
   end
